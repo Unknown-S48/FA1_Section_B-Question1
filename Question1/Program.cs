@@ -14,6 +14,8 @@
 */
 using System;
 using System.Globalization;
+using System.Linq;
+using System.Collections.Generic;
 
 class Program
 {
@@ -23,153 +25,186 @@ class Program
 
         Console.WriteLine("=== Welcome to Emfuleni Municipality Service Desk ===");
         Console.Write("How many residents do you want to register? ");
-        var countStr = Console.ReadLine()?.Trim();
-        if (!int.TryParse(countStr, out int count) || count < 0) count = 0;
-
+        int count;
+        while (true)
+        {
+            var countStr = Console.ReadLine()?.Trim();
+            if (int.TryParse(countStr, out count)&& count >= 1)
+            {
+                break;
+            }
+            Console.WriteLine("Invalid input. Please enter a valid number.");
+        }
         for (int i = 0; i < count; i++)
         {
             Console.WriteLine();
-            Console.WriteLine($"Enter details for resident #{i + 1}:");
+            Console.WriteLine($"--- Resident {i + 1} ---");
             Console.Write("Name: ");
             var name = Console.ReadLine() ?? "";
             Console.Write("Address: ");
             var address = Console.ReadLine() ?? "";
-            Console.Write("Account number: ");
+            Console.Write("Account Number: ");
             var account = Console.ReadLine() ?? "";
-            Console.Write("Monthly utility usage (kWh or units): ");
+            Console.Write("Monthly Utility Usage (kWh or Litres): ");
             var usageStr = Console.ReadLine() ?? "0";
             if (!double.TryParse(usageStr, NumberStyles.Number, CultureInfo.InvariantCulture, out double usage))
                 usage = 0;
 
             var r = manager.AddResident(name, address, account, usage);
-            Console.WriteLine($"Added resident: {r}");
         }
 
-        // Continue with interactive menu
+        Console.WriteLine();
+        Console.Write("How many service requests do you want to log? ");
+
+        int reqCount;
         while (true)
         {
-            Console.WriteLine();
-            Console.WriteLine("Emfuleni Municipality Console");
-            Console.WriteLine("1) Add resident");
-            Console.WriteLine("2) Create service request");
-            Console.WriteLine("3) View pending requests (by urgency)");
-            Console.WriteLine("4) Resolve a request");
-            Console.WriteLine("5) Summary report");
-            Console.WriteLine("0) Exit");
-            Console.Write("Select option: ");
-            var input = Console.ReadLine()?.Trim();
+            var reqCountStr = Console.ReadLine()?.Trim();
 
-            if (input == "0") break;
-
-            switch (input)
+            // Must be a valid integer AND >= 1
+            if (int.TryParse(reqCountStr, out reqCount) && reqCount >= 1)
             {
-                case "1":
-                    AddResidentFlow(manager);
-                    break;
-                case "2":
-                    CreateRequestFlow(manager);
-                    break;
-                case "3":
-                    ViewPendingFlow(manager);
-                    break;
-                case "4":
-                    ResolveFlow(manager);
-                    break;
-                case "5":
-                    Console.WriteLine(manager.SummaryReport());
-                    break;
-                default:
-                    Console.WriteLine("Invalid option.");
-                    break;
+                break; 
             }
+
+            Console.WriteLine("Invalid input. Please enter a positive whole number (1 or higher).");
         }
 
-        Console.WriteLine("Exiting. Goodbye.");
+        for (int i = 0; i < reqCount; i++)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"--- Service Request {i + 1} ---");
+
+            if (!manager.Residents.Any())
+            {
+                Console.WriteLine("No residents registered. Please add residents first.");
+                break;
+            }
+
+            int HighId = manager.Residents.Max(r => r.Id);
+
+            int residentId;
+            while (true)
+            {
+                Console.Write($"Select resident by number (1 to {HighId}): ");
+                var idStr = Console.ReadLine()?.Trim();
+
+                // Must be a valid integer AND correspond to an existing resident
+                if (int.TryParse(idStr, out residentId) && manager.GetResidentById(residentId) != null)
+                {
+                    break; // ✅ valid input, exit loop
+                }
+
+                Console.WriteLine("Invalid resident id. Please try again.");
+            }
+
+
+            Console.Write("Request Type (e.g., Water Outage, Burst Pipe): ");
+            var desc = Console.ReadLine() ?? "";
+
+            // Priority Level (1-5)
+            int priorityInput;
+            while (true)
+            {
+                Console.Write("Priority Level (1-5): ");
+                var pStr = Console.ReadLine()?.Trim();
+
+                if (int.TryParse(pStr, out priorityInput) && priorityInput >= 1 && priorityInput <= 5)
+                {
+                    break;
+                }
+
+                Console.WriteLine("Invalid input. Please enter a number between 1 and 5.");
+            }
+
+            PriorityLevel priority = MapPriorityToEnum(priorityInput);
+
+            // Severity Level (1-10)
+            int sev;
+            while (true)
+            {
+                Console.Write("Severity Level (1-10): ");
+                var sStr = Console.ReadLine()?.Trim();
+
+                if (int.TryParse(sStr, out sev) && sev >= 1 && sev <= 10)
+                {
+                    break; 
+                }
+
+                Console.WriteLine("Invalid input. Please enter a number between 1 and 10.");
+            }
+
+
+            Console.Write("Estimated Resolution Hours: ");
+            var eStr = Console.ReadLine();
+            if (!double.TryParse(eStr, NumberStyles.Number, CultureInfo.InvariantCulture, out double est)) est = 1.0;
+            est = Math.Max(0, est);
+
+            var req = manager.CreateServiceRequest(residentId, desc, priority, sev, est);
+
+            // Recalculate urgency now to reflect current values
+            req.CalculateUrgencyScore();
+
+            // Print service report for this request (match formatting from screenshot)
+            Console.WriteLine();
+            Console.WriteLine("==== Service Report ====");
+            Console.WriteLine($"Resident: {req.Requestor.Name}");
+            Console.WriteLine($"Service Type: {req.Description}");
+            Console.WriteLine($"Urgency Score: {FormatUrgencyForDisplay(req.UrgencyScore)}");
+            Console.WriteLine($"Adjusted Resolution: {AdjustedResolution(req.EstimatedResolutionHours, false)}");
+
+            Console.WriteLine($"Household Impact Score: {(req.Requestor.MonthlyUtilityUsage * req.SeverityLevel / 10.0).ToString("F0", CultureInfo.InvariantCulture)},00");
+        }
+
+        // After logging requests, show FINAL MUNICIPAL SUMMARY with highest urgency request
+        Console.WriteLine();
+        Console.WriteLine("==== FINAL MUNICIPAL SUMMARY ====");
+
+        var allRequests = manager.Requests.ToList();
+        if (!allRequests.Any())
+        {
+            Console.WriteLine("No requests logged.");
+        }
+        else
+        {
+            // Ensure all urgencies are up to date
+            foreach (var r in allRequests) r.CalculateUrgencyScore();
+
+            var top = allRequests.OrderByDescending(r => r.UrgencyScore).First();
+
+            Console.WriteLine("Highest priority issue:");
+            Console.WriteLine($"Resident: {top.Requestor.Name}");
+            Console.WriteLine($"Service Type: {top.Description}");
+            Console.WriteLine($"Urgency Score: {FormatUrgencyForDisplay(top.UrgencyScore)}");
+            Console.WriteLine($"Adjusted Resolution: {AdjustedResolution(top.EstimatedResolutionHours, true)}");
+
+            Console.WriteLine($"Household Impact Score: {(top.Requestor.MonthlyUtilityUsage * top.SeverityLevel / 10.0).ToString("F0", CultureInfo.InvariantCulture)},00");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Thank you for using the Emfuleni Municipality Service Desk.");
     }
 
-    static void AddResidentFlow(UtilitiesManager manager)
+    static PriorityLevel MapPriorityToEnum(int p)
     {
-        Console.Write("Name: ");
-        var name = Console.ReadLine() ?? "";
-        Console.Write("Address: ");
-        var address = Console.ReadLine() ?? "";
-        Console.Write("Account number: ");
-        var account = Console.ReadLine() ?? "";
-        Console.Write("Monthly utility usage (kWh or units): ");
-        var usageStr = Console.ReadLine() ?? "0";
-        if (!double.TryParse(usageStr, NumberStyles.Number, CultureInfo.InvariantCulture, out double usage))
-            usage = 0;
-
-        var r = manager.AddResident(name, address, account, usage);
-        Console.WriteLine($"Added resident: {r}");
+        // Map 1..5 into Low/Medium/High
+        if (p <= 2) return PriorityLevel.Low;    // 1-2 => Low
+        if (p == 3) return PriorityLevel.Medium; // 3 => Medium
+        return PriorityLevel.High;               // 4-5 => High
     }
 
-    static void CreateRequestFlow(UtilitiesManager manager)
+    static string AdjustedResolution(double hours, bool isFinalSummary = false)
     {
-        Console.WriteLine("Residents:");
-        foreach (var r in manager.Residents)
-            Console.WriteLine(r.ToString());
-
-        Console.Write("Enter resident ID: ");
-        var idStr = Console.ReadLine();
-        if (!int.TryParse(idStr, out int residentId))
-        {
-            Console.WriteLine("Invalid resident id.");
-            return;
-        }
-
-        var resident = manager.GetResidentById(residentId);
-        if (resident == null)
-        {
-            Console.WriteLine("Resident not found.");
-            return;
-        }
-
-        Console.Write("Description: ");
-        var desc = Console.ReadLine() ?? "";
-
-        Console.Write("Priority (1=Low,2=Medium,3=High): ");
-        var pStr = Console.ReadLine();
-        PriorityLevel priority = PriorityLevel.Medium;
-        if (int.TryParse(pStr, out int pInt) && Enum.IsDefined(typeof(PriorityLevel), pInt))
-            priority = (PriorityLevel)pInt;
-
-        Console.Write("Severity (1-10): ");
-        var sStr = Console.ReadLine();
-        if (!int.TryParse(sStr, out int sev)) sev = 5;
-        sev = Math.Clamp(sev, 1, 10);
-
-        Console.Write("Estimated resolution hours: ");
-        var eStr = Console.ReadLine();
-        if (!double.TryParse(eStr, NumberStyles.Number, CultureInfo.InvariantCulture, out double est)) est = 1.0;
-
-        var req = manager.CreateServiceRequest(residentId, desc, priority, sev, est);
-        Console.WriteLine("Created request:");
-        Console.WriteLine(req.ToString());
+        // Service Report: add 4 hours
+        // Final Summary: add 2 hours
+        var adjusted = isFinalSummary ? hours + 2 : hours + 4;
+        return $"{adjusted:0} hours";
     }
 
-    static void ViewPendingFlow(UtilitiesManager manager)
+    static string FormatUrgencyForDisplay(double score)
     {
-        var pending = manager.GetPendingRequestsOrderedByUrgency();
-        Console.WriteLine("Pending requests (highest urgency first):");
-        foreach (var r in pending)
-        {
-            Console.WriteLine(r.ToString());
-        }
-    }
-
-    static void ResolveFlow(UtilitiesManager manager)
-    {
-        Console.Write("Enter request id to resolve: ");
-        var s = Console.ReadLine();
-        if (!int.TryParse(s, out int id))
-        {
-            Console.WriteLine("Invalid id.");
-            return;
-        }
-
-        var success = manager.ResolveRequest(id);
-        Console.WriteLine(success ? $"Request {id} marked resolved." : $"Request {id} not found or already resolved.");
+        // Display urgency as an integer
+        return $"{Math.Round(score):0}";
     }
 }
 
@@ -186,7 +221,8 @@ Monthly Utility Usage (kWh or liters): {input}
 How many service requests do you want to log? {input}
 
 --- Service Request 1 ---
-Select resident by number (1 to 1): {input}
+1) Lindeka Mntambo
+Enter resident ID: {input}
 Request Type (e.g, Water Outage, Burst Pipe): {input}
 Priority Level (1-5): {input}
 Severity Level (1-10): {input}
